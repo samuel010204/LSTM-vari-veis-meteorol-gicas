@@ -4,7 +4,7 @@
 from tensorflow import keras
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from datetime import datetime
@@ -15,167 +15,211 @@ from datetime import datetime
 # ============================================================
 data = pd.read_csv("Dados_climaticos_nasa.csv")
 
-# Criar Data/Hora usando YEAR, MO, DY, HR
 data["Data/Hora"] = pd.to_datetime(
     data[["YEAR", "MO", "DY", "HR"]]
     .rename(columns={"MO": "month", "DY": "day", "HR": "hour"})
 )
 
-# (Opcional) remover colunas antigas
-# data = data.drop(columns=["YEAR", "MO", "DY", "HR"])
-
-# Exibir para conferência
 print(data.head())
-print(data.info())
 
 
 # ============================================================
-# 2. SELEÇÃO DO ALVO
+# 2. VARIÁVEIS TEMPORAIS CÍCLICAS (NOVIDADE)
 # ============================================================
-# Nome da coluna de irradiância do CSV fornecido
-TARGET_COLUMN = "ALLSKY_SFC_SW_DWN"
 
-dni = data[[TARGET_COLUMN]]
-dataset = dni.values
+# Hora do dia (0–23)
+data["hour_sin"] = np.sin(2 * np.pi * data["HR"] / 24)
+data["hour_cos"] = np.cos(2 * np.pi * data["HR"] / 24)
+
+# Dia do ano (1–365)
+data["DOY"] = data["Data/Hora"].dt.dayofyear
+data["doy_sin"] = np.sin(2 * np.pi * data["DOY"] / 365)
+data["doy_cos"] = np.cos(2 * np.pi * data["DOY"] / 365)
 
 
 # ============================================================
-# 3. SEPARAÇÃO ENTRE TREINO (95%) E TESTE (5%)
+# 3. SELEÇÃO DAS FEATURES E DO ALVO
 # ============================================================
+
+FEATURES = [
+    "ALLSKY_SFC_SW_DWN",  # irradiância passada
+    "hour_sin",
+    "hour_cos",
+    "doy_sin",
+    "doy_cos"
+]
+
+dataset = data[FEATURES].values
+
+
+# ============================================================
+# 4. SEPARAÇÃO TREINO (95%) / TESTE (5%)
+# ============================================================
+
 training_data_len = int(np.ceil(len(dataset) * 0.95))
 
 
 # ============================================================
-# 4. NORMALIZAÇÃO
+# 5. NORMALIZAÇÃO
 # ============================================================
-scaler = StandardScaler()
+
+scaler = MinMaxScaler() # mais estável p/ variáveis meteorológicas
 scaled_data = scaler.fit_transform(dataset)
 
 training_data = scaled_data[:training_data_len]
 
 
 # ============================================================
-# 5. CRIAR JANELAS DE 60 PASSOS (SLIDING WINDOW)
+# 6. CRIAÇÃO DAS JANELAS DE 60 PASSOS
 # ============================================================
+
 X_train, y_train = [], []
 
 for i in range(60, len(training_data)):
-    X_train.append(training_data[i-60:i, 0])
-    y_train.append(training_data[i, 0])
+    X_train.append(training_data[i-60:i, :])  # TODAS as features
+    y_train.append(training_data[i, 0])       # irradiância futura
 
 X_train = np.array(X_train)
 y_train = np.array(y_train)
 
-# reshape para LSTM → (amostras, passos, features)
-X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
+X_train = X_train.reshape(
+    (X_train.shape[0], X_train.shape[1], len(FEATURES))
+)
 
 
 # ============================================================
-# 6. MODELO LSTM
+# 7. MODELO LSTM
 # ============================================================
+
 model = keras.models.Sequential([
-    keras.layers.LSTM(64, return_sequences=True, input_shape=(X_train.shape[1], 1)),
+    keras.layers.LSTM(64, return_sequences=True,
+                      input_shape=(X_train.shape[1], len(FEATURES))),
     keras.layers.LSTM(64, return_sequences=False),
     keras.layers.Dense(128, activation="relu"),
-    keras.layers.Dropout(0.5),
+    keras.layers.Dropout(0.2),
     keras.layers.Dense(1)
 ])
 
-model.compile(optimizer="adam", loss="mae", metrics=[keras.metrics.RootMeanSquaredError()])
+model.compile(
+    optimizer="adam",
+    loss="mae",
+    metrics=[keras.metrics.RootMeanSquaredError()]
+)
+
 model.summary()
 
 
 # ============================================================
-# 7. TREINAMENTO
+# 8. TREINAMENTO
 # ============================================================
-history = model.fit(X_train, y_train, epochs=50, batch_size=16)
+
+history = model.fit(
+    X_train,
+    y_train,
+    epochs=1,
+    batch_size=16
+)
 
 
 # ============================================================
-# 8. PREPARAÇÃO DO TESTE
+# 9. PREPARAÇÃO DO TESTE
 # ============================================================
+
 test_data = scaled_data[training_data_len - 60:]
 X_test = []
-y_test = dataset[training_data_len:]
+y_test = data["ALLSKY_SFC_SW_DWN"].values[training_data_len:]
 
 for i in range(60, len(test_data)):
-    X_test.append(test_data[i-60:i, 0])
+    X_test.append(test_data[i-60:i, :])
 
 X_test = np.array(X_test)
-X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
+X_test = X_test.reshape(
+    (X_test.shape[0], X_test.shape[1], len(FEATURES))
+)
 
 
 # ============================================================
-# 9. PREVISÕES
+# 10. PREVISÕES
 # ============================================================
+
 predictions = model.predict(X_test)
-predictions = scaler.inverse_transform(predictions)
+
+# inverter escala apenas da irradiância
+dummy = np.zeros((predictions.shape[0], len(FEATURES)))
+dummy[:, 0] = predictions[:, 0]
+predictions = scaler.inverse_transform(dummy)[:, 0]
 
 
 # ============================================================
-# 10. CONSTRUIR DF DE RESULTADOS
+# 11. DATAFRAME DE RESULTADOS
 # ============================================================
+
 test_dates = data["Data/Hora"].iloc[training_data_len:].reset_index(drop=True)
 
-y_test_arr = np.array(y_test).reshape(-1)
-pred_arr = predictions.reshape(-1)
-
 df_results = pd.DataFrame({
-    "DataHora": test_dates[:len(pred_arr)],
-    "Real": y_test_arr[:len(pred_arr)],
-    "Predito": pred_arr
+    "DataHora": test_dates[:len(predictions)],
+    "Real": y_test[:len(predictions)],
+    "Predito": predictions
 })
 
-df_results["DataHora"] = pd.to_datetime(df_results["DataHora"])
-
 
 # ============================================================
-# 11. SELECIONAR DIA PARA PLOTAR
+# 12. PLOT DE UM DIA ESPECÍFICO
 # ============================================================
 
-print("Intervalo TOTAL do dataset:")
-print(data["Data/Hora"].min(), "→", data["Data/Hora"].max())
-
-print("\nIntervalo do df_results (previsões):")
-print(df_results["DataHora"].min(), "→", df_results["DataHora"].max())
-
-
-dia_escolhido = datetime(2025, 6, 1).date()   # <-- ALTERE AQUI
+dia_escolhido = datetime(2025, 6, 1).date()
 
 df_dia = df_results[df_results["DataHora"].dt.date == dia_escolhido]
 
-if df_dia.empty:
-    raise ValueError(f"Nenhum dado encontrado para o dia {dia_escolhido}.")
+#tabela de predito e real
+df_dia = df_dia.copy()
 
-print(df_dia.head())
+df_dia["Hora"] = df_dia["DataHora"].dt.strftime("%H:%M")
+df_dia["Erro (W/m²)"] = df_dia["Predito"] - df_dia["Real"]
+df_dia["Erro abs (W/m²)"] = np.abs(df_dia["Erro (W/m²)"])
+df_dia["Erro (%)"] = 100 * df_dia["Erro abs (W/m²)"] / df_dia["Real"].replace(0, np.nan)
 
+print("\nIrradiância hora a hora –", dia_escolhido)
+print(
+    df_dia[[
+        "Hora",
+        "Real",
+        "Predito",
+        "Erro (W/m²)",
+        "Erro (%)"
+    ]].to_string(index=False, justify="center", float_format="%.2f")
+)
 
-# ============================================================
-# 12. PLOT DO DIA ESCOLHIDO
-# ============================================================
-plt.figure(figsize=(14, 6))
-day_dates = df_dia["DataHora"]
-day_real  = df_dia["Real"]
-day_pred  = df_dia["Predito"]
+#plot erro absoluto
+plt.figure(figsize=(12,4))
 
-plt.plot(day_dates, day_real, label="Real", marker='o')
-plt.plot(day_dates, day_pred, label="Estimativa", marker='s')
+plt.bar(
+    df_dia["Hora"],
+    df_dia["Erro abs (W/m²)"]
+)
 
-plt.title(f"Estimativa vs Real – Irradiância no dia {dia_escolhido}")
-plt.ylabel("Irradiância (W/m²)")
-plt.xlabel("Horário")
+plt.xlabel("Hora")
+plt.ylabel("|Erro| (W/m²)")
+plt.title(f"Erro absoluto horário – {dia_escolhido}")
 plt.grid(True)
+
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+
+#plot estimação x realidade
+plt.figure(figsize=(14, 6))
+plt.plot(df_dia["DataHora"], df_dia["Real"], label="Real", marker="o")
+plt.plot(df_dia["DataHora"], df_dia["Predito"], label="Estimado", marker="s")
+
+plt.title(f"Irradiância – {dia_escolhido}")
+plt.xlabel("Hora")
+plt.ylabel("W/m²")
 plt.legend()
+plt.grid(True)
 
-# Configurar eixo X de 01:00 até 23:00
-start_tick = pd.to_datetime(f"{dia_escolhido} 01:00")
-end_tick   = pd.to_datetime(f"{dia_escolhido} 23:00")
-hour_ticks = pd.date_range(start=start_tick, end=end_tick, freq="1H")
-
-plt.gca().set_xticks(hour_ticks)
 plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-plt.xlim(start_tick, end_tick)
-
 plt.xticks(rotation=45)
 plt.tight_layout()
 plt.show()
