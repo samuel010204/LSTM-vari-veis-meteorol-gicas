@@ -43,10 +43,14 @@ data["doy_cos"] = np.cos(2 * np.pi * data["DOY"] / 365)
 
 FEATURES = [
     "ALLSKY_SFC_SW_DWN",  # irradiância passada
+    "RH2M",              # umidade relativa
+    "T2M",               # temperatura do ar
+    "PRECTOTCORR",       # precipitação
     "hour_sin",
     "hour_cos",
     "doy_sin",
     "doy_cos"
+    
 ]
 
 dataset = data[FEATURES].values
@@ -116,7 +120,7 @@ model.summary()
 history = model.fit(
     X_train,
     y_train,
-    epochs=1,
+    epochs=25,
     batch_size=16
 )
 
