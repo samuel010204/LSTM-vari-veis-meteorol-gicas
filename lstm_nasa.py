@@ -77,11 +77,13 @@ training_data = scaled_data[:training_data_len]
 # 6. CRIAÇÃO DAS JANELAS DE 60 PASSOS
 # ============================================================
 
+HORIZON = 24 # Definição do horizon de previsão
+
 X_train, y_train = [], []
 
-for i in range(60, len(training_data)):
+for i in range(60, len(training_data)-HORIZON):
     X_train.append(training_data[i-60:i, :])  # TODAS as features
-    y_train.append(training_data[i, 0])       # irradiância futura
+    y_train.append(training_data[i + HORIZON, 0])       # irradiância futura
 
 X_train = np.array(X_train)
 y_train = np.array(y_train)
@@ -96,10 +98,10 @@ X_train = X_train.reshape(
 # ============================================================
 
 model = keras.models.Sequential([
-    keras.layers.LSTM(64, return_sequences=True,
+    keras.layers.LSTM(128, return_sequences=True,
                       input_shape=(X_train.shape[1], len(FEATURES))),
-    keras.layers.LSTM(64, return_sequences=False),
-    keras.layers.Dense(128, activation="relu"),
+    keras.layers.LSTM(128, return_sequences=False),
+    keras.layers.Dense(256, activation="relu"),
     keras.layers.Dropout(0.2),
     keras.layers.Dense(1)
 ])
@@ -120,7 +122,7 @@ model.summary()
 history = model.fit(
     X_train,
     y_train,
-    epochs=25,
+    epochs=1,
     batch_size=16
 )
 
@@ -131,9 +133,9 @@ history = model.fit(
 
 test_data = scaled_data[training_data_len - 60:]
 X_test = []
-y_test = data["ALLSKY_SFC_SW_DWN"].values[training_data_len:]
+y_test = data["ALLSKY_SFC_SW_DWN"].values[training_data_len + HORIZON:]
 
-for i in range(60, len(test_data)):
+for i in range(60, len(test_data) - HORIZON):
     X_test.append(test_data[i-60:i, :])
 
 X_test = np.array(X_test)
@@ -158,7 +160,7 @@ predictions = scaler.inverse_transform(dummy)[:, 0]
 # 11. DATAFRAME DE RESULTADOS
 # ============================================================
 
-test_dates = data["Data/Hora"].iloc[training_data_len:].reset_index(drop=True)
+test_dates = data["Data/Hora"].iloc[training_data_len + HORIZON:].reset_index(drop=True)
 
 df_results = pd.DataFrame({
     "DataHora": test_dates[:len(predictions)],
