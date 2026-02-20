@@ -9,6 +9,13 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from datetime import datetime
 
+#
+# PARÂMETROS
+#
+
+EPOCHS = 1
+HORIZON = 0 # Definição do horizonte de previsão (h = horizon + 1)
+
 
 # ============================================================
 # 1. CARREGAR DADOS E CRIAR DATA/HORA
@@ -24,7 +31,7 @@ print(data.head())
 
 
 # ============================================================
-# 2. VARIÁVEIS TEMPORAIS CÍCLICAS (NOVIDADE)
+# 2. VARIÁVEIS TEMPORAIS CÍCLICAS 
 # ============================================================
 
 # Hora do dia (0–23)
@@ -77,8 +84,6 @@ training_data = scaled_data[:training_data_len]
 # 6. CRIAÇÃO DAS JANELAS DE 60 PASSOS
 # ============================================================
 
-HORIZON = 24 # Definição do horizon de previsão
-
 X_train, y_train = [], []
 
 for i in range(60, len(training_data)-HORIZON):
@@ -122,7 +127,7 @@ model.summary()
 history = model.fit(
     X_train,
     y_train,
-    epochs=1,
+    epochs=EPOCHS,
     batch_size=16
 )
 
@@ -185,6 +190,10 @@ df_dia["Erro (W/m²)"] = df_dia["Predito"] - df_dia["Real"]
 df_dia["Erro abs (W/m²)"] = np.abs(df_dia["Erro (W/m²)"])
 df_dia["Erro (%)"] = 100 * df_dia["Erro abs (W/m²)"] / df_dia["Real"].replace(0, np.nan)
 
+erro_medio_percentual = df_dia["Erro (%)"].mean()
+
+print(f"\nErro médio percentual do dia {dia_escolhido}: {erro_medio_percentual:.2f}%")
+
 print("\nIrradiância hora a hora –", dia_escolhido)
 print(
     df_dia[[
@@ -227,5 +236,43 @@ plt.grid(True)
 
 plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
 plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# 13. PLOT DO ERRO PERCENTUAL
+# ============================================================
+
+plt.figure(figsize=(12,4))
+
+plt.bar(
+    df_dia["Hora"],
+    df_dia["Erro (%)"]
+)
+
+plt.xlabel("Hora")
+plt.ylabel("Erro (%)")
+plt.title(f"Erro percentual horário – {dia_escolhido}")
+plt.grid(True)
+
+plt.xticks(rotation=45)
+
+# Linha do MAPE
+plt.axhline(erro_medio_percentual, linestyle='--')
+
+# Texto informativo no gráfico
+texto_info = (
+    f"MAPE = {erro_medio_percentual:.2f}%\n"
+    f"EPOCHS = {EPOCHS}\n"
+    f"HORIZON = {HORIZON + 1}h"
+)
+
+plt.text(
+    0,
+    erro_medio_percentual,
+    texto_info,
+    verticalalignment='bottom'
+)
+
 plt.tight_layout()
 plt.show()
